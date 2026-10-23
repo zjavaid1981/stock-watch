@@ -23,6 +23,7 @@ jobs:
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           POSTAL: ${{ secrets.POSTAL }}
+          TZ: America/Toronto
         run: >
           python3 iphone_stock.py
           --postal "$POSTAL"

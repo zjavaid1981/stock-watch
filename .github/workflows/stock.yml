@@ -31,5 +31,4 @@ jobs:
           --radius 100
           --notify "$NTFY_TOPIC"
           --always-alert
-          --heartbeat
           --no-beep

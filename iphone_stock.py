@@ -179,10 +179,8 @@ def check(country, postal, model, skus, colors, capacities, args):
             found[(row[0], row[2])] = row
         time.sleep(0.6)  # be gentle
     if errors == len(skus):
-        if args.notify and args.heartbeat:
-            notify(args.notify, f"{model} check FAILED",
-                   f"{time.strftime('%H:%M')} - could not reach Apple (network/VPN/proxy?). Will retry next run.",
-                   priority="default", tags="warning")
+        print(f"[error] {model}: could not reach Apple (network/VPN/proxy?). Will retry next run.",
+              file=sys.stderr)         # log only; pushes are sent only when stock is found
         return                         # total failure: keep old state, try again next run
 
     print(time.strftime("\n=== %Y-%m-%d %H:%M:%S ===") + f"  {model} near {postal}"
@@ -193,12 +191,7 @@ def check(country, postal, model, skus, colors, capacities, args):
     now = {f"{k[0]}|{k[1]}" for k in found}
 
     if not found:
-        print("No stock for pickup at nearby stores.")
-        if args.notify and args.heartbeat:        # "script ran, nothing in stock" ping
-            notify(args.notify, f"{model}: no stock",
-                   f"Checked {time.strftime('%H:%M')} near {postal}"
-                   + (f" (within {args.radius:g} km)" if args.radius else "") + " - nothing available.",
-                   priority="min", tags="white_check_mark")
+        print("No stock for pickup at nearby stores.")   # log only, no push notification
     else:
         for store, dist, part, title, quote, _ in sorted(found.values(), key=lambda r: (r[5], r[3])):
             new = f"{store}|{part}" not in already
@@ -233,7 +226,8 @@ def main():
     ap.add_argument("--notify", metavar="TOPIC", help="ntfy.sh topic to push alerts to")
     ap.add_argument("--always-alert", action="store_true", help="alert for ALL available stock on every run, not just new")
     ap.add_argument("--heartbeat", action="store_true",
-                    help="also push a quiet 'no stock' message each run (and a warning if Apple can't be reached)")
+                    help="deprecated and ignored (kept so old command lines still work); "
+                         "pushes are now sent only when stock is found")
     ap.add_argument("--no-beep", action="store_true", help="don't beep (for scheduled runs)")
     ap.add_argument("--watch", type=int, metavar="SECONDS", help="repeat every N seconds (min 30)")
     a = ap.parse_args()

@@ -94,7 +94,7 @@ python3 iphone_stock.py --notify my-topic --test-notify
 | `--radius KM` | Only stores within this distance |
 | `--notify TOPIC` | Send push alerts to this ntfy topic |
 | `--always-alert` | Alert for all available stock every run, not just newly appeared stock |
-| `--heartbeat` | Also send a quiet "no stock" message each run, and a warning if Apple cannot be reached |
+| `--heartbeat` | Deprecated and ignored. Push notifications are now sent only when stock is found |
 | `--no-beep` | Do not beep (use for scheduled or unattended runs) |
 | `--watch SECONDS` | Repeat every N seconds (minimum 30) instead of running once |
 | `--test-notify` | Send a test push and exit |
@@ -107,4 +107,5 @@ Without `--always-alert`, the script only alerts for stock that is new since the
 - **No notifications.** Run with `--test-notify`, confirm the topic name matches the one in the ntfy app, and check that both repository secrets exist and are spelled exactly `NTFY_TOPIC` and `POSTAL`.
 - **"could not reach Apple" warnings.** Apple sometimes returns errors under heavy load. The script retries automatically and tries again on the next run.
 - **Nothing is ever found for a model.** Apple may have changed its product pages or the endpoint. Delete the matching entries in `sku_cache_v2.json` so the part numbers are fetched again.
-- **Too many "no stock" pings.** Remove `--heartbeat` from the workflow command.
+- **I only want to hear about it when stock appears.** That is the default now: "no stock" results and Apple connection errors are written to the Actions log but never pushed to your phone. While an item stays in stock, `--always-alert` pushes it on every check; remove that flag to be alerted only when stock newly appears.
+- **How do I know it is still running?** Look at the run on the Actions tab, since a quiet phone now means "no stock" and not "broken".

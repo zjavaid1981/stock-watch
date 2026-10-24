@@ -209,7 +209,8 @@ def check(country, postal, model, skus, colors, capacities, args):
                 lines.append(f"...and {len(new_rows) - 20} more")
             fam = MODELS[model]["family"]
             notify(args.notify, f"{model} in stock near {postal}", "\n".join(lines),
-                   click=f"https://www.apple.com/{country}/shop/buy-iphone/{fam}")
+                   click=f"https://www.apple.com/{country}/shop/buy-iphone/{fam}",
+                   priority="urgent")      # ntfy max priority: loudest alert the app can send
     state[skey] = sorted(now)          # sold-out items drop out, so a restock alerts again
     save_json(STATE, state)
     # What happened this check: "alerted" = stock push sent, "stock" = in stock but nothing new
@@ -256,7 +257,7 @@ def main():
                          "pushes are now sent only when stock is found")
     ap.add_argument("--heartbeat-every", type=int, default=0, metavar="N",
                     help="with --watch and --notify: if N checks in a row send no stock alert, push a "
-                         "'still running, no stock' message (e.g. 12 with --watch 300 = at least hourly)")
+                         "'still running, no stock' message (e.g. 30 with --watch 120 = at least hourly)")
     ap.add_argument("--no-beep", action="store_true", help="don't beep (for scheduled runs)")
     ap.add_argument("--watch", type=int, metavar="SECONDS", help="repeat every N seconds (min 30)")
     a = ap.parse_args()

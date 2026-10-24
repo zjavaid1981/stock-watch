@@ -147,7 +147,7 @@ def beep():
         sys.stdout.flush()
 
 
-def notify(topic, title, body, click=None, priority="high", tags="iphone,rotating_light"):
+def notify(topic, title, body, click=None, priority="high", tags="white_check_mark,iphone"):
     """Push to the ntfy app. Sends only store/model text."""
     headers = {"Title": title, "Priority": priority, "Tags": tags}
     if click:
@@ -230,12 +230,13 @@ def send_heartbeat(args, models, window, cycles):
         if window["stock"]:
             title = f"{names}: still in stock"
             body = f"Stock seen in {window['stock']} of the last {total} checks (~{minutes} min), already alerted."
+            tags = "white_check_mark"      # green tick: stock exists
         else:
             title = f"{names}: no stock"
             body = f"No stock in the last {total} checks (~{minutes} min). Script is running fine."
+            tags = "x"                     # red X: no stock
         if window["error"]:
             body += f" {window['error']} check(s) could not reach Apple."
-        tags = "white_check_mark"
     notify(args.notify, title, body, priority="default", tags=tags)
 
 

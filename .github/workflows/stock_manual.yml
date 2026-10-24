@@ -56,7 +56,8 @@ jobs:
               --always-alert \
               --no-beep \
               --heartbeat-every 12 \
-              --watch 300|| echo "[wrapper] iphone_stock.py exited with code $?"
+              --watch 300 \
+              || echo "[wrapper] iphone_stock.py exited with code $?"
             if [ "$(date +%s)" -lt "$END" ]; then sleep 30; fi
           done
           echo "[wrapper] time window finished; handing over to the next run"

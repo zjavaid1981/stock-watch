@@ -2,7 +2,7 @@ name: iphone-stock
 
 on:
   schedule:
-    - cron: "3-59/5 * * * *"     # every 5 min (GitHub may start runs a few minutes late)
+    - cron: "7,22,37,52 * * * *"   # every 15 min, off-peak minutes
   workflow_dispatch:           # lets you run it manually from the Actions tab
 
 concurrency:

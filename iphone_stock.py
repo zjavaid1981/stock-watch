@@ -181,7 +181,7 @@ def check(country, postal, model, skus, colors, capacities, args):
     if errors == len(skus):
         print(f"[error] {model}: could not reach Apple (network/VPN/proxy?). Will retry next run.",
               file=sys.stderr)         # log only; pushes are sent only when stock is found
-        return                         # total failure: keep old state, try again next run
+        return "error"                 # total failure: keep old state, try again next run
 
     print(time.strftime("\n=== %Y-%m-%d %H:%M:%S ===") + f"  {model} near {postal}"
           + (f" (within {args.radius:g} km)" if args.radius else ""))
@@ -212,6 +212,31 @@ def check(country, postal, model, skus, colors, capacities, args):
                    click=f"https://www.apple.com/{country}/shop/buy-iphone/{fam}")
     state[skey] = sorted(now)          # sold-out items drop out, so a restock alerts again
     save_json(STATE, state)
+    # What happened this check: "alerted" = stock push sent, "stock" = in stock but nothing new
+    # to announce, "none" = no stock.  (main() uses this to decide when a heartbeat is due.)
+    return "alerted" if new_rows else ("stock" if found else "none")
+
+
+def send_heartbeat(args, models, window, cycles):
+    """'Still alive' push, sent when `cycles` checks in a row produced no stock alert."""
+    names = ", ".join(models)
+    minutes = round(cycles * max(30, args.watch) / 60)
+    total = sum(window.values())
+    if window["error"] == total:
+        title = f"{names}: cannot reach Apple"
+        body = f"All {total} checks in the last ~{minutes} min failed to reach Apple. Still retrying."
+        tags = "warning"
+    else:
+        if window["stock"]:
+            title = f"{names}: still in stock"
+            body = f"Stock seen in {window['stock']} of the last {total} checks (~{minutes} min), already alerted."
+        else:
+            title = f"{names}: no stock"
+            body = f"No stock in the last {total} checks (~{minutes} min). Script is running fine."
+        if window["error"]:
+            body += f" {window['error']} check(s) could not reach Apple."
+        tags = "white_check_mark"
+    notify(args.notify, title, body, priority="default", tags=tags)
 
 
 def main():
@@ -228,6 +253,9 @@ def main():
     ap.add_argument("--heartbeat", action="store_true",
                     help="deprecated and ignored (kept so old command lines still work); "
                          "pushes are now sent only when stock is found")
+    ap.add_argument("--heartbeat-every", type=int, default=0, metavar="N",
+                    help="with --watch and --notify: if N checks in a row send no stock alert, push a "
+                         "'still running, no stock' message (e.g. 12 with --watch 300 = at least hourly)")
     ap.add_argument("--no-beep", action="store_true", help="don't beep (for scheduled runs)")
     ap.add_argument("--watch", type=int, metavar="SECONDS", help="repeat every N seconds (min 30)")
     a = ap.parse_args()
@@ -263,11 +291,22 @@ def main():
         if not skus[model]:
             sys.exit(f"[error] could not resolve any part numbers for {model}.")
 
+    window = {"none": 0, "stock": 0, "error": 0}   # outcomes since the last push of any kind
+    quiet = 0                                       # check cycles since the last push of any kind
     while True:
-        for model, colors, caps in plan:
-            check(a.country, postal, model, list(skus[model]), colors, caps, a)
+        outcomes = [check(a.country, postal, model, list(skus[model]), colors, caps, a)
+                    for model, colors, caps in plan]
         if not a.watch:
             return
+        if "alerted" in outcomes:                   # a stock alert went out: restart the quiet count
+            window, quiet = {"none": 0, "stock": 0, "error": 0}, 0
+        else:
+            for o in outcomes:
+                window[o] += 1
+            quiet += 1
+            if a.heartbeat_every and a.notify and quiet >= a.heartbeat_every:
+                send_heartbeat(a, [m for m, _, _ in plan], window, quiet)
+                window, quiet = {"none": 0, "stock": 0, "error": 0}, 0
         time.sleep(max(30, a.watch))
 
 

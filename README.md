@@ -55,7 +55,7 @@ Both workflows watch the same thing. Use one of them, not both, or you will get 
 
 **`stock_manual.yml` (self-restarting loop)** is the more dependable option. Start it once with **Actions → iphone-stock_manual → Run workflow**:
 
-- Each run loops for about 5 h 45 min, checking every 5 minutes.
+- Each run loops for about 5 h 45 min, checking every 5 minutes, and sends an hourly "no stock" heartbeat while nothing is available.
 - GitHub limits a job to 6 hours, so when a run ends a second job starts a fresh run of the same workflow. The gap between runs is under a minute.
 - If the script crashes, it is restarted after 30 seconds.
 - A safety-net schedule every 2 hours restarts the loop if the chain ever breaks. It queues behind a running loop, so there are no duplicates.
@@ -94,7 +94,8 @@ python3 iphone_stock.py --notify my-topic --test-notify
 | `--radius KM` | Only stores within this distance |
 | `--notify TOPIC` | Send push alerts to this ntfy topic |
 | `--always-alert` | Alert for all available stock every run, not just newly appeared stock |
-| `--heartbeat` | Deprecated and ignored. Push notifications are now sent only when stock is found |
+| `--heartbeat-every N` | Only with `--watch` and `--notify`. If N checks in a row send no stock alert, push a "still running, no stock" message. With `--watch 300`, `12` means a push at least once an hour |
+| `--heartbeat` | Deprecated and ignored (kept so old command lines still work) |
 | `--no-beep` | Do not beep (use for scheduled or unattended runs) |
 | `--watch SECONDS` | Repeat every N seconds (minimum 30) instead of running once |
 | `--test-notify` | Send a test push and exit |
@@ -107,5 +108,5 @@ Without `--always-alert`, the script only alerts for stock that is new since the
 - **No notifications.** Run with `--test-notify`, confirm the topic name matches the one in the ntfy app, and check that both repository secrets exist and are spelled exactly `NTFY_TOPIC` and `POSTAL`.
 - **"could not reach Apple" warnings.** Apple sometimes returns errors under heavy load. The script retries automatically and tries again on the next run.
 - **Nothing is ever found for a model.** Apple may have changed its product pages or the endpoint. Delete the matching entries in `sku_cache_v2.json` so the part numbers are fetched again.
-- **I only want to hear about it when stock appears.** That is the default now: "no stock" results and Apple connection errors are written to the Actions log but never pushed to your phone. While an item stays in stock, `--always-alert` pushes it on every check; remove that flag to be alerted only when stock newly appears.
-- **How do I know it is still running?** Look at the run on the Actions tab, since a quiet phone now means "no stock" and not "broken".
+- **What notifications will I get?** The scheduled `stock.yml` pushes only when stock is found. The loop (`stock_manual.yml`) pushes on every check while stock is available (`--always-alert`), and sends a "no stock" heartbeat after every 12 checks in a row that sent nothing, so you hear from it at least once an hour (every 5 minutes at the most). If Apple cannot be reached for a whole hour, the heartbeat says so instead. Remove `--always-alert` to be alerted only when stock newly appears, or remove `--heartbeat-every 12` to turn the heartbeat off.
+- **How do I know the loop is still running?** The hourly heartbeat is the signal: if an hour passes with no push of any kind, check the run on the Actions tab. The heartbeat count restarts whenever a new run starts, about every 5 h 45 min, so one gap can be a little longer than an hour then.

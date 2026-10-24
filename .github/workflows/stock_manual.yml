@@ -1,0 +1,87 @@
+name: iphone-stock_manual
+
+# Self-sustaining loop that does not depend on GitHub's flaky cron.
+#
+# How it works:
+#   1. Start it once with "Run workflow" on the Actions tab.
+#   2. The "loop" job runs iphone_stock.py every 5 min for ~5h45m
+#      (GitHub hard-limits a hosted job to 6 hours).
+#   3. When it finishes, the "relaunch" job starts a fresh run of this same
+#      workflow, so the checks continue forever with only a few seconds' gap.
+#
+# To STOP it:  Actions -> iphone-stock_manual -> "..." menu -> Disable workflow,
+#              then cancel the run that is in progress.
+#              (Cancelling alone stops the chain; the 2-hourly safety net below
+#              would restart it, which is why you also disable the workflow.)
+
+on:
+  workflow_dispatch:           # start it manually from the Actions tab
+  schedule:
+    - cron: "41 */2 * * *"     # safety net only: restarts the loop if the chain ever breaks.
+                               # If a loop is already running this just queues behind it,
+                               # and a newer queued run replaces it, so there are no duplicates.
+
+# Only one loop at a time. A newly started run waits for the current one to finish.
+concurrency:
+  group: iphone-stock-manual
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check iPhone Duo stock every 5 minutes (~5h45m)
+        shell: bash
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          POSTAL: ${{ secrets.POSTAL }}
+          TZ: America/Toronto
+        run: |
+          END=$(( $(date +%s) + 20700 ))      # 345 minutes from now
+          while [ "$(date +%s)" -lt "$END" ]; do
+            LEFT=$(( END - $(date +%s) ))
+            # SIGINT lets the script exit cleanly when time is up.
+            # If the script ever crashes, the wrapper restarts it after 30 s.
+            timeout -s INT "$LEFT" python3 -u iphone_stock.py \
+              --postal "$POSTAL" \
+              --model "iPhone Duo" \
+              --radius 100 \
+              --notify "$NTFY_TOPIC" \
+              --always-alert \
+              --heartbeat \
+              --no-beep \
+              --watch 300 || echo "[wrapper] iphone_stock.py exited with code $?"
+            if [ "$(date +%s)" -lt "$END" ]; then sleep 30; fi
+          done
+          echo "[wrapper] time window finished; handing over to the next run"
+
+  relaunch:
+    needs: loop
+    if: ${{ !cancelled() }}      # a manual cancel stops the chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write             # needed to start the next run
+    steps:
+      - name: Start the next run of this workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Short pause so a crash-looping run can never spin up runs back to back.
+          sleep 20
+          for i in 1 2 3 4 5; do
+            if gh workflow run stock_manual.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"; then
+              echo "Next run requested."
+              exit 0
+            fi
+            echo "Attempt $i failed; retrying in 30 s"
+            sleep 30
+          done
+          echo "Could not start the next run; the 2-hourly safety-net schedule will restart it."
+          exit 1

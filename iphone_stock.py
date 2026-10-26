@@ -246,10 +246,10 @@ def check(country, postal, model, skus, colors, capacities, args):
     return "alerted" if new_rows else ("stock" if found else "none")
 
 
-def send_heartbeat(args, models, window, cycles):
-    """'Still alive' push, sent when `cycles` checks in a row produced no stock alert."""
+def send_heartbeat(args, models, window, elapsed):
+    """'Still alive' push: no stock alert was sent for `elapsed` seconds (real wall-clock time)."""
     names = ", ".join(models)
-    minutes = round(cycles * max(30, args.watch) / 60)
+    minutes = max(1, round(elapsed / 60))
     total = sum(window.values())
     if window["error"] == total:
         title = f"{names}: cannot reach Apple"
@@ -283,9 +283,11 @@ def main():
     ap.add_argument("--heartbeat", action="store_true",
                     help="deprecated and ignored (kept so old command lines still work); "
                          "pushes are now sent only when stock is found")
+    ap.add_argument("--heartbeat-minutes", type=float, default=0, metavar="MIN",
+                    help="with --watch and --notify: if MIN minutes of real time pass without a stock "
+                         "alert, push a 'still running, no stock' message (60 = at least hourly)")
     ap.add_argument("--heartbeat-every", type=int, default=0, metavar="N",
-                    help="with --watch and --notify: if N checks in a row send no stock alert, push a "
-                         "'still running, no stock' message (e.g. 30 with --watch 120 = at least hourly)")
+                    help="same, but counted in checks instead of minutes (--heartbeat-minutes is more exact)")
     ap.add_argument("--no-beep", action="store_true", help="don't beep (for scheduled runs)")
     ap.add_argument("--watch", type=int, metavar="SECONDS", help="repeat every N seconds (min 30)")
     a = ap.parse_args()
@@ -323,20 +325,24 @@ def main():
 
     window = {"none": 0, "stock": 0, "error": 0}   # outcomes since the last push of any kind
     quiet = 0                                       # check cycles since the last push of any kind
+    since = time.monotonic()                        # when the last push of any kind went out
     while True:
         outcomes = [check(a.country, postal, model, list(skus[model]), colors, caps, a)
                     for model, colors, caps in plan]
         if not a.watch:
             return
         if "alerted" in outcomes:                   # a stock alert went out: restart the quiet count
-            window, quiet = {"none": 0, "stock": 0, "error": 0}, 0
+            window, quiet, since = {"none": 0, "stock": 0, "error": 0}, 0, time.monotonic()
         else:
             for o in outcomes:
                 window[o] += 1
             quiet += 1
-            if a.heartbeat_every and a.notify and quiet >= a.heartbeat_every:
-                send_heartbeat(a, [m for m, _, _ in plan], window, quiet)
-                window, quiet = {"none": 0, "stock": 0, "error": 0}, 0
+            elapsed = time.monotonic() - since
+            due = ((a.heartbeat_minutes and elapsed >= a.heartbeat_minutes * 60)
+                   or (a.heartbeat_every and quiet >= a.heartbeat_every))
+            if due and a.notify:
+                send_heartbeat(a, [m for m, _, _ in plan], window, elapsed)
+                window, quiet, since = {"none": 0, "stock": 0, "error": 0}, 0, time.monotonic()
         time.sleep(max(30, a.watch))
 
 

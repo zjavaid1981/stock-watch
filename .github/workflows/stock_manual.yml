@@ -4,7 +4,7 @@ name: iphone-stock_manual
 #
 # How it works:
 #   1. Start it once with "Run workflow" on the Actions tab.
-#   2. The "loop" job runs iphone_stock.py every 2 min for ~5h45m
+#   2. The "loop" job runs iphone_stock.py every 1 min for ~5h45m
 #      (GitHub hard-limits a hosted job to 6 hours).
 #   3. When it finishes, the "relaunch" job starts a fresh run of this same
 #      workflow, so the checks continue forever with only a few seconds' gap.
@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check iPhone Duo stock every 2 minutes (~5h45m)
+      - name: Check iPhone Duo stock every minute (~5h45m)
         shell: bash
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
@@ -55,8 +55,8 @@ jobs:
               --notify "$NTFY_TOPIC" \
               --always-alert \
               --no-beep \
-              --heartbeat-every 30 \
-              --watch 120 \
+              --heartbeat-minutes 60 \
+              --watch 60 \
               || echo "[wrapper] iphone_stock.py exited with code $?"
             if [ "$(date +%s)" -lt "$END" ]; then sleep 30; fi
           done

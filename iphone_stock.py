@@ -118,6 +118,10 @@ def query(country, postal, sku):
 def available_in(data, model, colors, capacities):
     """Yield (store, distance, part, title, quote, km) for available variants of `model`."""
     title_re = re.compile(rf"^{re.escape(model)}\s+(\d+\s?[GT]B)\s+(.+)$", re.I)
+    cfg = MODELS[model]
+    name = model.lower()
+    longer = [m.lower() for m in MODELS if m.lower() != name and m.lower().startswith(name)]
+    shared_family = any(m != model and MODELS[m]["family"] == cfg["family"] for m in MODELS)
     stores = data.get("body", {}).get("PickupMessage", {}).get("stores", []) or []
     for s in stores:
         for part, info in (s.get("partsAvailability") or {}).items():
@@ -125,13 +129,28 @@ def available_in(data, model, colors, capacities):
                 continue
             title = ((info.get("messageTypes") or {}).get("regular") or {}).get("storePickupProductTitle", "")
             title = " ".join(title.split())   # Apple uses non-breaking spaces; normalize them
+            low = title.lower()
+            # Is this part ours?  In a family with sibling models (iPhone 18 Pro / Pro Max) it must
+            # start with our model name and not a longer one.  In a single-model family (iPhone Duo)
+            # everything Apple reports belongs to us.
+            mine = (low.startswith(name) and not any(low.startswith(l) for l in longer)) if shared_family else True
             m = title_re.match(title)
-            if not m:          # other model (e.g. "iPhone 18 Pro" when you asked for "Max")
-                continue
-            cap = m.group(1).replace(" ", "").lower()
-            col = m.group(2).strip().lower().replace(" ", "-")   # "Mist Blue" -> "mist-blue"
-            if cap not in capacities or col not in colors:
-                continue
+            flag = None                       # set when stock exists but we can't classify it: ALERT anyway
+            if not m:
+                if not mine:      # other model (e.g. "iPhone 18 Pro" when you asked for "Max")
+                    continue
+                flag = "unrecognized title"
+            else:
+                cap = m.group(1).replace(" ", "").lower()
+                col = m.group(2).strip().lower().replace(" ", "-")   # "Mist Blue" -> "mist-blue"
+                if col not in cfg["colors"] or cap not in cfg["caps"]:
+                    flag = "new colour/capacity"
+                elif cap not in capacities or col not in colors:
+                    continue          # a known variant you filtered out with --color/--capacity
+            if flag:                  # fail open: better a false alarm than missed stock
+                print(f"[warn] available but not recognized ({flag}): {title or '(no title)'} [{part}] "
+                      f"at {s.get('storeName', '?')}", file=sys.stderr)
+                title = f"{title or part} (UNRECOGNIZED VARIANT - check Apple)"
             yield (s.get("storeName", "?"), s.get("storeDistanceWithUnit", ""), part, title,
                    info.get("pickupSearchQuote", ""), s.get("storedistance", 1e9))
 

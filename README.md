@@ -7,7 +7,7 @@ Watches Apple Canada for iPhone **in-store pickup** availability near you and se
 - Sends push alerts through [ntfy.sh](https://ntfy.sh) (free, no account needed)
 - Stdlib-only Python 3.8+, no dependencies to install
 
-> **Heads up:** this uses Apple's unofficial "Pick up from Store" endpoint. It is not a supported API and may change or stop working without notice.
+> **Heads up:** this uses Apple's unofficial "Pick up from Store" endpoint. It is not a supported API and may change or stop working without notice. This is an independent personal project, not affiliated with or endorsed by Apple. Apple and iPhone are trademarks of Apple Inc. Please keep the check interval polite (a few minutes is plenty) and use it for your own purchases.
 
 ## How it works
 
@@ -45,7 +45,7 @@ In the repo go to **Settings → Secrets and variables → Actions → New repos
 | `NTFY_TOPIC` | Your ntfy topic name |
 | `POSTAL` | Your postal code, for example `A1A 1A1` |
 
-Keep these as secrets. The repository is public, so anything in the workflow files is visible to everyone.
+Keep these as secrets. If the repository is public, anything in the workflow files is visible to everyone, and so are the Actions logs. For that reason the script never prints your ntfy topic, and it logs only the first three characters of your postal code (for example `K1A***`). Do not add `echo` or debug lines that print either value.
 
 ### 3. Pick a workflow
 
@@ -109,6 +109,7 @@ Without `--always-alert`, the script only alerts for stock that is new since the
 - **"could not reach Apple" warnings.** Apple sometimes returns errors under heavy load. The script retries automatically and tries again on the next run.
 - **Nothing is ever found for a model.** Apple may have changed its product pages or the endpoint. Delete the matching entries in `sku_cache_v2.json` so the part numbers are fetched again.
 - **What notifications will I get?** The scheduled `stock.yml` pushes only when stock is found. The loop (`stock_manual.yml`) pushes on every check while stock is available (`--always-alert`), and sends a "no stock" heartbeat after every 30 checks (about an hour) in a row that sent nothing, so you hear from it at least once an hour (every 2 minutes at the most). Stock alerts use ntfy's maximum ("urgent") priority; on iPhone, allow ntfy in your Focus / Do Not Disturb settings so they can break through. If Apple cannot be reached for a whole hour, the heartbeat says so instead. Remove `--always-alert` to be alerted only when stock newly appears, or remove `--heartbeat-every 30` to turn the heartbeat off. If Apple starts failing or throttling requests (the heartbeat will say "cannot reach Apple"), raise `--watch` back toward 300 and set `--heartbeat-every` to 3600 divided by that number of seconds.
-- **What if Apple words a title differently or adds a colour?** The script fails open: any available part it cannot classify (unknown title, colour or capacity) still triggers a normal stock alert, with "(UNRECOGNIZED VARIANT - check Apple)" in the text, plus a `[warn]` line in the log. This only applies to variants Apple reports for the model you are watching, and variants you excluded with `--color` / `--capacity` stay excluded.
+- **What if Apple words a title differently or adds a colour or capacity?** The script fails open for phones: an available part that looks like a phone (its title contains a storage size such as `256GB` or `1TB`) but does not match a known colour or capacity still triggers a normal stock alert, with "(UNRECOGNIZED VARIANT - check Apple)" in the text and a `[warn]` line in the log.
+- **Will cases or other accessories ever alert me?** No. Only parts whose title contains a storage size are treated as phones, so cases, covers, chargers and bands are ignored, as are other models in the same family (for example iPhone 18 Pro when you watch the Pro Max) and variants you excluded with `--color` / `--capacity`. A part with an empty title is also ignored.
 - **What do the icons mean?** ✅ green tick = stock found, ❌ red X = no stock (heartbeat), ⚠️ = could not reach Apple.
 - **How do I know the loop is still running?** The hourly heartbeat is the signal: if an hour passes with no push of any kind, check the run on the Actions tab. The heartbeat count restarts whenever a new run starts, about every 5 h 45 min, so one gap can be a little longer than an hour then.

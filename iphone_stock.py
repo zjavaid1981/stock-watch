@@ -2,9 +2,9 @@
 """
 Find iPhone pickup stock at Apple Stores near you (Apple Canada by default), any color / capacity.
 
-  python iphone_stock.py --postal "L1L 0B4" --model "iPhone 18 Pro Max"
-  python iphone_stock.py --postal "L1L 0B4" --model "iPhone 18 Pro Max" --model "iPhone 17" --notify my-topic
-  python iphone_stock.py --postal "L1L 0B4" --model "iPhone 17" --watch 120      # loop instead of one-shot
+  python iphone_stock.py --postal "A1A 1A1" --model "iPhone 18 Pro Max"
+  python iphone_stock.py --postal "A1A 1A1" --model "iPhone 18 Pro Max" --model "iPhone 17" --notify my-topic
+  python iphone_stock.py --postal "A1A 1A1" --model "iPhone 17" --watch 120      # loop instead of one-shot
   python iphone_stock.py ... --color black --capacity 256gb                      # optional filters
 
 Prints each store with stock, beeps, and (with --notify TOPIC) sends a push via ntfy.sh to the
@@ -115,6 +115,9 @@ def query(country, postal, sku):
     return json.loads(get_retry(url, "application/json"))
 
 
+CAPACITY_RE = re.compile(r"\b\d+\s?[GT]B\b", re.I)   # "256GB", "1 TB": marks a title as a phone
+
+
 def available_in(data, model, colors, capacities):
     """Yield (store, distance, part, title, quote, km) for available variants of `model`."""
     title_re = re.compile(rf"^{re.escape(model)}\s+(\d+\s?[GT]B)\s+(.+)$", re.I)
@@ -135,9 +138,13 @@ def available_in(data, model, colors, capacities):
             # everything Apple reports belongs to us.
             mine = (low.startswith(name) and not any(low.startswith(l) for l in longer)) if shared_family else True
             m = title_re.match(title)
-            flag = None                       # set when stock exists but we can't classify it: ALERT anyway
+            flag = None                       # set when a PHONE is available but we can't classify it
             if not m:
                 if not mine:      # other model (e.g. "iPhone 18 Pro" when you asked for "Max")
+                    continue
+                # Only a phone has a storage size in its title.  Cases, covers, chargers, bands and
+                # anything with a missing/odd title are ignored, so accessories can never alert.
+                if not CAPACITY_RE.search(title):
                     continue
                 flag = "unrecognized title"
             else:
@@ -202,7 +209,9 @@ def check(country, postal, model, skus, colors, capacities, args):
               file=sys.stderr)         # log only; pushes are sent only when stock is found
         return "error"                 # total failure: keep old state, try again next run
 
-    print(time.strftime("\n=== %Y-%m-%d %H:%M:%S ===") + f"  {model} near {postal}"
+    # Log only the first 3 characters of the postal code: Actions logs of a public repo are readable by
+    # other GitHub users, and GitHub's secret masking would not match this normalised form.
+    print(time.strftime("\n=== %Y-%m-%d %H:%M:%S ===") + f"  {model} near {postal[:3]}***"
           + (f" (within {args.radius:g} km)" if args.radius else ""))
     state = load_json(STATE)
     skey = f"{country}|{postal}|{model}|{','.join(colors)}|{','.join(capacities)}|{args.radius}"

@@ -118,6 +118,19 @@ def query(country, postal, sku):
 CAPACITY_RE = re.compile(r"\b\d+\s?[GT]B\b", re.I)   # "256GB", "1 TB": marks a title as a phone
 
 
+def variant_url(country, model, title):
+    """Apple's page for the exact variant in `title` (e.g. '1TB Night Sky'); the model's page if unsure."""
+    cfg = MODELS[model]
+    base = f"https://www.apple.com/{country}/shop/buy-iphone/{cfg['family']}"
+    m = re.match(rf"^{re.escape(model)}\s+(\d+\s?[GT]B)\s+(.+)$", title or "", re.I)
+    if m:
+        cap = m.group(1).replace(" ", "").lower()
+        col = m.group(2).strip().lower().replace(" ", "-")
+        if cap in cfg["caps"] and col in cfg["colors"]:
+            return f"{base}/{cfg['display']}-{cap}-{col}"
+    return base
+
+
 def _dig(obj, *keys):
     """obj[k1][k2]... or None if any level is missing or not a dict (Apple's JSON can change shape)."""
     for k in keys:
@@ -272,9 +285,8 @@ def check(country, postal, model, skus, colors, capacities, args):
             lines = [f"{r[3]} - {r[0]} ({r[1]}) {r[4]}".strip() for r in new_rows[:20]]
             if len(new_rows) > 20:
                 lines.append(f"...and {len(new_rows) - 20} more")
-            fam = MODELS[model]["family"]
             notify(args.notify, f"{model} in stock near {postal}", "\n".join(lines),
-                   click=f"https://www.apple.com/{country}/shop/buy-iphone/{fam}",
+                   click=variant_url(country, model, new_rows[0][3]),   # tap -> exact variant, closest store first
                    priority="urgent")      # ntfy max priority: loudest alert the app can send
     state[skey] = sorted(now)          # sold-out items drop out, so a restock alerts again
     save_json(STATE, state)

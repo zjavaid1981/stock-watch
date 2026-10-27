@@ -1,0 +1,28 @@
+name: notify-test
+
+# Sends one test push to your ntfy topic from GitHub's servers.
+# Run it from Actions -> notify-test -> Run workflow.
+#   - the run goes green and your phone gets "iPhone stock test"  -> notifications work end to end
+#   - the run goes red                                             -> ntfy rejected or could not be reached
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: notify-test
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Send test notification
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: python3 -u iphone_stock.py --notify "$NTFY_TOPIC" --test-notify

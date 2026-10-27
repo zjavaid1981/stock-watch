@@ -118,6 +118,23 @@ def query(country, postal, sku):
 CAPACITY_RE = re.compile(r"\b\d+\s?[GT]B\b", re.I)   # "256GB", "1 TB": marks a title as a phone
 
 
+def _dig(obj, *keys):
+    """obj[k1][k2]... or None if any level is missing or not a dict (Apple's JSON can change shape)."""
+    for k in keys:
+        if not isinstance(obj, dict):
+            return None
+        obj = obj.get(k)
+    return obj
+
+
+def _km(value):
+    """Store distance as a number.  Unknown or odd values count as 0 km so a store is never dropped."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def available_in(data, model, colors, capacities):
     """Yield (store, distance, part, title, quote, km) for available variants of `model`."""
     title_re = re.compile(rf"^{re.escape(model)}\s+(\d+\s?[GT]B)\s+(.+)$", re.I)
@@ -125,13 +142,21 @@ def available_in(data, model, colors, capacities):
     name = model.lower()
     longer = [m.lower() for m in MODELS if m.lower() != name and m.lower().startswith(name)]
     shared_family = any(m != model and MODELS[m]["family"] == cfg["family"] for m in MODELS)
-    stores = data.get("body", {}).get("PickupMessage", {}).get("stores", []) or []
+    pm = _dig(data, "body", "PickupMessage")
+    if pm is None:                            # not the shape we know: report it, never crash on it
+        raise ValueError(f"unexpected response shape: {str(data)[:200]!r}")
+    stores = pm.get("stores") or []
+    if not isinstance(stores, list):
+        raise ValueError(f"unexpected 'stores' shape: {str(stores)[:200]!r}")
     for s in stores:
-        for part, info in (s.get("partsAvailability") or {}).items():
-            if info.get("pickupDisplay") != "available":
+        if not isinstance(s, dict):
+            continue
+        parts = s.get("partsAvailability")
+        for part, info in (parts.items() if isinstance(parts, dict) else ()):
+            if not isinstance(info, dict) or info.get("pickupDisplay") != "available":
                 continue
-            title = ((info.get("messageTypes") or {}).get("regular") or {}).get("storePickupProductTitle", "")
-            title = " ".join(title.split())   # Apple uses non-breaking spaces; normalize them
+            title = _dig(info, "messageTypes", "regular", "storePickupProductTitle")
+            title = " ".join(str(title or "").split())   # Apple uses non-breaking spaces; normalize them
             low = title.lower()
             # Is this part ours?  In a family with sibling models (iPhone 18 Pro / Pro Max) it must
             # start with our model name and not a longer one.  In a single-model family (iPhone Duo)
@@ -159,7 +184,7 @@ def available_in(data, model, colors, capacities):
                       f"at {s.get('storeName', '?')}", file=sys.stderr)
                 title = f"{title or part} (UNRECOGNIZED VARIANT - check Apple)"
             yield (s.get("storeName", "?"), s.get("storeDistanceWithUnit", ""), part, title,
-                   info.get("pickupSearchQuote", ""), s.get("storedistance", 1e9))
+                   info.get("pickupSearchQuote", ""), _km(s.get("storedistance")))
 
 
 def beep():
@@ -180,13 +205,19 @@ def notify(topic, title, body, click=None, priority="high", tags="white_check_ma
         headers["Click"] = click
     req = urllib.request.Request("https://ntfy.sh/" + urllib.parse.quote(topic),
                                  data=body.encode("utf-8"), headers=headers, method="POST")
-    try:
-        urllib.request.urlopen(req, timeout=20).read()
-        print(f"[notify] push sent to ntfy topic '{topic}'")
-        return True
-    except Exception as e:
-        print(f"[notify error] {e}", file=sys.stderr)
-        return False
+    for attempt in range(3):                  # a failed push must not mean a missed alert: retry
+        try:
+            urllib.request.urlopen(req, timeout=20).read()
+            print("[notify] push sent to ntfy")    # the topic is never printed (it is a secret)
+            return True
+        except urllib.error.HTTPError as e:
+            err = f"HTTP {e.code} {e.reason}"
+        except Exception as e:
+            err = str(e)
+        print(f"[notify error] attempt {attempt + 1}/3: {err}", file=sys.stderr)
+        if attempt < 2:
+            time.sleep(2 * (attempt + 1))
+    return False
 
 
 def check(country, postal, model, skus, colors, capacities, args):
@@ -199,7 +230,13 @@ def check(country, postal, model, skus, colors, capacities, args):
             errors += 1
             print(f"[error] {sku}: {e}", file=sys.stderr)
             continue
-        for row in available_in(data, model, colors, capacities):
+        try:
+            rows = list(available_in(data, model, colors, capacities))
+        except Exception as e:               # odd response from Apple: count it as a failed check
+            errors += 1
+            print(f"[error] {sku}: could not read Apple's response: {type(e).__name__}: {e}", file=sys.stderr)
+            continue
+        for row in rows:
             if args.radius and row[5] > args.radius:
                 continue                     # outside your radius
             found[(row[0], row[2])] = row
@@ -246,6 +283,15 @@ def check(country, postal, model, skus, colors, capacities, args):
     return "alerted" if new_rows else ("stock" if found else "none")
 
 
+def safe_check(*args):
+    """check(), but nothing it does wrong can kill the loop (a crash would reset the hourly timer)."""
+    try:
+        return check(*args)
+    except Exception as e:
+        print(f"[error] unexpected failure in check: {type(e).__name__}: {e}", file=sys.stderr)
+        return "error"
+
+
 def send_heartbeat(args, models, window, elapsed):
     """'Still alive' push: no stock alert was sent for `elapsed` seconds (real wall-clock time)."""
     names = ", ".join(models)
@@ -265,7 +311,10 @@ def send_heartbeat(args, models, window, elapsed):
             body = f"No stock in the last {total} checks (~{minutes} min). Script is running fine."
             tags = "x"                     # red X: no stock
         if window["error"]:
-            body += f" {window['error']} check(s) could not reach Apple."
+            body = body.replace(" Script is running fine.", "")
+            body += (f" WARNING: {window['error']} of those checks could not get a usable answer from Apple, "
+                     "so stock may have been missed during them.")
+            tags = "warning," + tags       # warning sign as well as the icon above
     notify(args.notify, title, body, priority="default", tags=tags)
 
 
@@ -327,7 +376,7 @@ def main():
     quiet = 0                                       # check cycles since the last push of any kind
     since = time.monotonic()                        # when the last push of any kind went out
     while True:
-        outcomes = [check(a.country, postal, model, list(skus[model]), colors, caps, a)
+        outcomes = [safe_check(a.country, postal, model, list(skus[model]), colors, caps, a)
                     for model, colors, caps in plan]
         if not a.watch:
             return

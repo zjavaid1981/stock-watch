@@ -17,6 +17,9 @@ of the model and merges the answers. Variant part numbers are read once from App
 and cached in sku_cache_v2.json. Stdlib only, Python 3.8+. Unofficial endpoint: may change.
 """
 import argparse, json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+_last_alert = {}    # check key -> time.monotonic() of the last stock push (limits repeat pushes)
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -236,24 +239,30 @@ def notify(topic, title, body, click=None, priority="high", tags="white_check_ma
 def check(country, postal, model, skus, colors, capacities, args):
     found = {}  # (store, part) -> row
     errors = 0
-    for sku in skus:
+
+    def fetch(sku):                          # runs in a worker thread; never raises
         try:
             data = query(country, postal, sku)
         except Exception as e:
-            errors += 1
-            print(f"[error] {sku}: {e}", file=sys.stderr)
-            continue
+            return sku, None, str(e)
         try:
-            rows = list(available_in(data, model, colors, capacities))
+            return sku, list(available_in(data, model, colors, capacities)), None
         except Exception as e:               # odd response from Apple: count it as a failed check
+            return sku, None, f"could not read Apple's response: {type(e).__name__}: {e}"
+
+    # All variants are asked at the same moment, so one round takes about as long as ONE request
+    # (~1 s) instead of eight in a row.
+    with ThreadPoolExecutor(max_workers=max(1, min(8, len(skus)))) as pool:
+        results = list(pool.map(fetch, skus))
+    for sku, rows, err in results:
+        if err:
             errors += 1
-            print(f"[error] {sku}: could not read Apple's response: {type(e).__name__}: {e}", file=sys.stderr)
+            print(f"[error] {sku}: {err}", file=sys.stderr)
             continue
         for row in rows:
             if args.radius and row[5] > args.radius:
                 continue                     # outside your radius
             found[(row[0], row[2])] = row
-        time.sleep(0.6)  # be gentle
     if errors == len(skus):
         print(f"[error] {model}: could not reach Apple (network/VPN/proxy?). Will retry next run.",
               file=sys.stderr)         # log only; pushes are sent only when stock is found
@@ -275,9 +284,18 @@ def check(country, postal, model, skus, colors, capacities, args):
             new = f"{store}|{part}" not in already
             print(f"IN STOCK  {store:<26} {dist:<10} {title}  [{part}]  {quote}{'  (NEW)' if new else ''}")
 
-    new_rows = [r for k, r in sorted(found.items(), key=lambda kv: (kv[1][5], kv[1][3]))
-                if args.always_alert or f"{k[0]}|{k[1]}" not in already]
+    ordered = sorted(found.items(), key=lambda kv: (kv[1][5], kv[1][3]))
+    fresh = [r for k, r in ordered if f"{k[0]}|{k[1]}" not in already]     # appeared since last check
+    if args.always_alert:
+        # New stock is announced at once.  Stock that stays available is repeated, but at most once per
+        # --realert-seconds, so fast checking cannot flood your phone or hit ntfy's rate limits.
+        gap = getattr(args, "realert_seconds", 60)
+        repeat_due = time.monotonic() - _last_alert.get(skey, -1e9) >= gap
+        new_rows = [r for _, r in ordered] if (fresh or (found and repeat_due)) else []
+    else:
+        new_rows = fresh
     if new_rows:
+        _last_alert[skey] = time.monotonic()
         print(">>> Stock available for pickup!" if args.always_alert else ">>> New stock available for pickup!")
         if not args.no_beep:
             beep()
@@ -350,7 +368,11 @@ def main():
     ap.add_argument("--heartbeat-every", type=int, default=0, metavar="N",
                     help="same, but counted in checks instead of minutes (--heartbeat-minutes is more exact)")
     ap.add_argument("--no-beep", action="store_true", help="don't beep (for scheduled runs)")
-    ap.add_argument("--watch", type=int, metavar="SECONDS", help="repeat every N seconds (min 30)")
+    ap.add_argument("--watch", type=float, metavar="SECONDS",
+                    help="repeat every N seconds (min 5); the wait is counted from the end of each round")
+    ap.add_argument("--realert-seconds", type=float, default=60, metavar="SEC",
+                    help="with --always-alert: while stock stays available, repeat the push at most this often "
+                         "(new stock is always announced immediately). Default 60")
     a = ap.parse_args()
     if a.test_notify:
         if not a.notify:
@@ -387,6 +409,7 @@ def main():
     window = {"none": 0, "stock": 0, "error": 0}   # outcomes since the last push of any kind
     quiet = 0                                       # check cycles since the last push of any kind
     since = time.monotonic()                        # when the last push of any kind went out
+    delay = max(5, a.watch or 0)                    # seconds to wait between rounds (grows if Apple errors)
     while True:
         outcomes = [safe_check(a.country, postal, model, list(skus[model]), colors, caps, a)
                     for model, colors, caps in plan]
@@ -404,7 +427,10 @@ def main():
             if due and a.notify:
                 send_heartbeat(a, [m for m, _, _ in plan], window, elapsed)
                 window, quiet, since = {"none": 0, "stock": 0, "error": 0}, 0, time.monotonic()
-        time.sleep(max(30, a.watch))
+        # If Apple refuses EVERY request (throttling/blocking), slow down instead of hammering it,
+        # and go straight back to full speed after the first good round.
+        delay = min(delay * 2, 120) if all(o == "error" for o in outcomes) else max(5, a.watch)
+        time.sleep(delay)
 
 
 if __name__ == "__main__":

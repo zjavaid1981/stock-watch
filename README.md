@@ -27,7 +27,7 @@ Supported models are defined in `MODELS` at the top of `iphone_stock.py` (iPhone
 | `iphone_stock.py` | The checker. Run it by hand or from a workflow. |
 | `sku_cache_v2.json` | Cached Apple part numbers, so product pages are fetched only once. |
 | `.github/workflows/stock.yml` | Scheduled workflow (GitHub cron, every 15 min). |
-| `.github/workflows/stock_manual.yml` | Self-restarting loop that checks every minute without relying on GitHub's cron. |
+| `.github/workflows/stock_manual.yml` | Self-restarting loop that checks every 10 seconds without relying on GitHub's cron. |
 
 ## Setup
 
@@ -55,7 +55,7 @@ Both workflows watch the same thing. Use one of them, not both, or you will get 
 
 **`stock_manual.yml` (self-restarting loop)** is the more dependable option. Start it once with **Actions → iphone-stock_manual → Run workflow**:
 
-- Each run loops for about 5 h 45 min, checking every minute, and sends an hourly "no stock" heartbeat while nothing is available.
+- Each run loops for about 5 h 45 min, checking every 10 seconds, and sends an hourly "no stock" heartbeat while nothing is available.
 - GitHub limits a job to 6 hours, so when a run ends a second job starts a fresh run of the same workflow. The gap between runs is under a minute.
 - If the script crashes, it is restarted after 30 seconds.
 - A safety-net schedule every 2 hours restarts the loop if the chain ever breaks. It queues behind a running loop, so there are no duplicates.
@@ -98,7 +98,8 @@ python3 iphone_stock.py --notify my-topic --test-notify
 | `--heartbeat-every N` | Same idea counted in checks instead of minutes. Less exact, because each check takes a few seconds on top of the `--watch` wait |
 | `--heartbeat` | Deprecated and ignored (kept so old command lines still work) |
 | `--no-beep` | Do not beep (use for scheduled or unattended runs) |
-| `--watch SECONDS` | Repeat every N seconds (minimum 30) instead of running once |
+| `--watch SECONDS` | Repeat every N seconds (minimum 5) instead of running once. All variants are asked at the same time, so a round takes about a second. If Apple refuses every request, the wait doubles up to 2 minutes and returns to normal after the first good round |
+| `--realert-seconds SEC` | With `--always-alert`: while stock stays available, repeat the push at most this often (default 60). New stock, such as a new store or variant, is always announced immediately |
 | `--test-notify` | Send a test push and exit |
 
 Without `--always-alert`, the script only alerts for stock that is new since the last run (remembered in `alert_state.json`). If an item sells out and comes back, you are alerted again.
@@ -109,7 +110,7 @@ Without `--always-alert`, the script only alerts for stock that is new since the
 - **No notifications.** Run with `--test-notify`, confirm the topic name matches the one in the ntfy app, and check that both repository secrets exist and are spelled exactly `NTFY_TOPIC` and `POSTAL`.
 - **"could not reach Apple" warnings.** Apple sometimes returns errors under heavy load. The script retries automatically and tries again on the next run.
 - **Nothing is ever found for a model.** Apple may have changed its product pages or the endpoint. Delete the matching entries in `sku_cache_v2.json` so the part numbers are fetched again.
-- **What notifications will I get?** The scheduled `stock.yml` pushes only when stock is found. The loop (`stock_manual.yml`) pushes on every check while stock is available (`--always-alert`), and sends a "no stock" heartbeat once an hour (60 minutes of real time) in which nothing else was sent, so you hear from it about once an hour at the least and every minute at the most. Stock alerts use ntfy's maximum ("urgent") priority; on iPhone, allow ntfy in your Focus / Do Not Disturb settings so they can break through. If Apple cannot be reached for a whole hour, the heartbeat says so instead. Remove `--always-alert` to be alerted only when stock newly appears, or remove `--heartbeat-minutes 60` to turn the heartbeat off. If Apple starts failing or throttling requests (the heartbeat will say "cannot reach Apple"), raise `--watch` toward 120 or 300; the hourly heartbeat needs no change because it is based on time.
+- **What notifications will I get?** The scheduled `stock.yml` pushes only when stock is found. The loop (`stock_manual.yml`) pushes the moment stock appears and then once a minute while it stays available (`--always-alert`, `--realert-seconds`), and sends a "no stock" heartbeat once an hour (60 minutes of real time) in which nothing else was sent, so you hear from it about once an hour at the least and at most one push per minute while stock stays available (new stock is always announced at once). Stock alerts use ntfy's maximum ("urgent") priority; on iPhone, allow ntfy in your Focus / Do Not Disturb settings so they can break through. If Apple cannot be reached for a whole hour, the heartbeat says so instead. Remove `--always-alert` to be alerted only when stock newly appears, or remove `--heartbeat-minutes 60` to turn the heartbeat off. If Apple starts failing or throttling requests (the heartbeat will say "cannot reach Apple"), raise `--watch` toward 30, 60 or 120; the hourly heartbeat needs no change because it is based on time.
 - **What if Apple words a title differently or adds a colour or capacity?** The script fails open for phones: an available part that looks like a phone (its title contains a storage size such as `256GB` or `1TB`) but does not match a known colour or capacity still triggers a normal stock alert, with "(UNRECOGNIZED VARIANT - check Apple)" in the text and a `[warn]` line in the log.
 - **Will cases or other accessories ever alert me?** No. Only parts whose title contains a storage size are treated as phones, so cases, covers, chargers and bands are ignored, as are other models in the same family (for example iPhone 18 Pro when you watch the Pro Max) and variants you excluded with `--color` / `--capacity`. A part with an empty title is also ignored.
 - **What happens when I tap an alert?** It opens Apple's page for the exact variant at the closest store with stock (for example the 1TB Night Sky page), or the model's page if the variant was not recognised. The script alerts you; it never logs in, adds to the bag or buys anything for you.

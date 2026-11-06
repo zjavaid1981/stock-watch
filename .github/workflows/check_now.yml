@@ -1,0 +1,38 @@
+name: check-now
+
+# One live check right now, from GitHub's servers (not from your computer).
+# Run it from Actions -> check-now -> Run workflow.
+#   - green run + a "Self-test: checks are working" push on your phone -> Apple is answering the checks
+#   - red run, or a "PROBLEM" push                                   -> Apple is refusing or the answers are unreadable
+# If stock happens to be available at that moment you also get the normal urgent stock alert.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: check-now
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: One live check
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          POSTAL: ${{ secrets.POSTAL }}
+        run: |
+          python3 -u iphone_stock.py \
+            --postal "$POSTAL" \
+            --model "iPhone Duo" \
+            --radius 100 \
+            --notify "$NTFY_TOPIC" \
+            --always-alert \
+            --no-beep \
+            --selftest

@@ -20,6 +20,7 @@ import argparse, json, os, re, sys, time, urllib.error, urllib.parse, urllib.req
 from concurrent.futures import ThreadPoolExecutor
 
 _last_alert = {}    # check key -> time.monotonic() of the last stock push (limits repeat pushes)
+_last_round = {}    # model -> how the most recent round went (used by --selftest)
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -239,6 +240,7 @@ def notify(topic, title, body, click=None, priority="high", tags="white_check_ma
 def check(country, postal, model, skus, colors, capacities, args):
     found = {}  # (store, part) -> row
     errors = 0
+    t0 = time.monotonic()
 
     def fetch(sku):                          # runs in a worker thread; never raises
         try:
@@ -263,6 +265,8 @@ def check(country, postal, model, skus, colors, capacities, args):
             if args.radius and row[5] > args.radius:
                 continue                     # outside your radius
             found[(row[0], row[2])] = row
+    _last_round[model] = {"errors": errors, "total": len(skus), "seconds": time.monotonic() - t0,
+                          "in_stock": len(found)}
     if errors == len(skus):
         print(f"[error] {model}: could not reach Apple (network/VPN/proxy?). Will retry next run.",
               file=sys.stderr)         # log only; pushes are sent only when stock is found
@@ -311,6 +315,26 @@ def check(country, postal, model, skus, colors, capacities, args):
     # What happened this check: "alerted" = stock push sent, "stock" = in stock but nothing new
     # to announce, "none" = no stock.  (main() uses this to decide when a heartbeat is due.)
     return "alerted" if new_rows else ("stock" if found else "none")
+
+
+def run_selftest(a, plan, skus, postal):
+    """One live round per model; push a plain report to the phone.  Exit code 1 if Apple answered nothing."""
+    bad = problem = False           # bad: Apple answered nothing at all; problem: any check failed
+    lines = []
+    for model, colors, caps in plan:
+        safe_check(a.country, postal, model, list(skus[model]), colors, caps, a)
+        r = _last_round.get(model) or {"errors": 1, "total": 1, "seconds": 0.0, "in_stock": 0}
+        answered = r["total"] - r["errors"]
+        bad = bad or answered == 0
+        problem = problem or r["errors"] > 0
+        lines.append(f"{model}: Apple answered {answered} of {r['total']} variant checks in {r['seconds']:.1f}s; "
+                     + (f"{r['in_stock']} in stock nearby" if answered else "no usable answers"))
+    for l in lines:
+        print("[selftest] " + l)
+    if a.notify:
+        notify(a.notify, "Self-test: " + ("PROBLEM" if problem else "checks are working"),
+               "\n".join(lines), priority="default", tags="warning" if problem else "mag")
+    return 1 if bad else 0
 
 
 def safe_check(*args):
@@ -367,6 +391,9 @@ def main():
                          "alert, push a 'still running, no stock' message (60 = at least hourly)")
     ap.add_argument("--heartbeat-every", type=int, default=0, metavar="N",
                     help="same, but counted in checks instead of minutes (--heartbeat-minutes is more exact)")
+    ap.add_argument("--selftest", action="store_true",
+                    help="do ONE live round now, push a short report (how many variant checks Apple answered, "
+                         "how fast) and exit with code 1 if Apple answered nothing")
     ap.add_argument("--no-beep", action="store_true", help="don't beep (for scheduled runs)")
     ap.add_argument("--watch", type=float, metavar="SECONDS",
                     help="repeat every N seconds (min 5); the wait is counted from the end of each round")
@@ -406,8 +433,11 @@ def main():
         if not skus[model]:
             sys.exit(f"[error] could not resolve any part numbers for {model}.")
 
+    if a.selftest:
+        sys.exit(run_selftest(a, plan, skus, postal))
+
     window = {"none": 0, "stock": 0, "error": 0}   # outcomes since the last push of any kind
-    quiet = 0                                       # check cycles since the last push of any kind
+    quiet = 0                                      # check cycles since the last push of any kind
     since = time.monotonic()                        # when the last push of any kind went out
     delay = max(5, a.watch or 0)                    # seconds to wait between rounds (grows if Apple errors)
     err_since, err_warned = None, False             # when rounds started failing; "cannot reach Apple" sent?

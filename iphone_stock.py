@@ -410,11 +410,24 @@ def main():
     quiet = 0                                       # check cycles since the last push of any kind
     since = time.monotonic()                        # when the last push of any kind went out
     delay = max(5, a.watch or 0)                    # seconds to wait between rounds (grows if Apple errors)
+    err_since, err_warned = None, False             # when rounds started failing; "cannot reach Apple" sent?
     while True:
         outcomes = [safe_check(a.country, postal, model, list(skus[model]), colors, caps, a)
                     for model, colors, caps in plan]
         if not a.watch:
             return
+        if all(o == "error" for o in outcomes):     # Apple is refusing everything: tell the user after 10 min
+            err_since = err_since if err_since is not None else time.monotonic()
+            if a.notify and not err_warned and time.monotonic() - err_since >= 600:
+                notify(a.notify, f"{', '.join(m for m, _, _ in plan)}: cannot reach Apple",
+                       "Every check has failed for 10 minutes (Apple may be throttling or blocking this server). "
+                       "Still retrying with longer waits, and stock alerts will resume by themselves. "
+                       "Check Apple's site or the Apple Store app by hand meanwhile.",
+                       priority="default", tags="warning")
+                err_warned = True
+                window, quiet, since = {"none": 0, "stock": 0, "error": 0}, 0, time.monotonic()
+        else:
+            err_since, err_warned = None, False
         if "alerted" in outcomes:                   # a stock alert went out: restart the quiet count
             window, quiet, since = {"none": 0, "stock": 0, "error": 0}, 0, time.monotonic()
         else:

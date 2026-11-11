@@ -6,8 +6,9 @@ name: iphone-stock_manual
 #   1. Start it once with "Run workflow" on the Actions tab.
 #   2. The "loop" job runs iphone_stock.py every 10 s for ~5h45m
 #      (GitHub hard-limits a hosted job to 6 hours).
-#   3. When it finishes, the "relaunch" job starts a fresh run of this same
-#      workflow, so the checks continue forever with only a few seconds' gap.
+#   3. When it finishes, the SAME job's last step queues the next run (and checks that the new run
+#      really started, retrying if GitHub failed to start it). A separate "relaunch" job does the same
+#      as a fallback, so one GitHub hiccup cannot break the chain. The gap is a few seconds.
 #
 # To STOP it:  Actions -> iphone-stock_manual -> "..." menu -> Disable workflow,
 #              then cancel the run that is in progress.
@@ -33,6 +34,9 @@ jobs:
   loop:
     runs-on: ubuntu-latest
     timeout-minutes: 355
+    permissions:
+      contents: read
+      actions: write             # lets the last step queue the next run
     steps:
       - uses: actions/checkout@v4
 
@@ -62,27 +66,23 @@ jobs:
           done
           echo "[wrapper] time window finished; handing over to the next run"
 
-  relaunch:
-    needs: loop
-    if: ${{ !cancelled() }}      # a manual cancel stops the chain
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: write             # needed to start the next run
-    steps:
-      - name: Start the next run of this workflow
+      - name: Queue the next run (and verify it started)
+        if: ${{ !cancelled() }}      # a manual cancel stops the chain
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          # Short pause so a crash-looping run can never spin up runs back to back.
-          sleep 20
-          for i in 1 2 3 4 5; do
-            if gh workflow run stock_manual.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME"; then
-              echo "Next run requested."
-              exit 0
-            fi
-            echo "Attempt $i failed; retrying in 30 s"
-            sleep 30
-          done
-          echo "Could not start the next run; the 2-hourly safety-net schedule will restart it."
-          exit 1
+        run: bash .github/scripts/ensure_next_run.sh
+
+  relaunch:                          # fallback: only does anything if the step above could not run
+    needs: loop
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make sure a next run exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/ensure_next_run.sh
